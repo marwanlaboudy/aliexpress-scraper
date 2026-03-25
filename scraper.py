@@ -11,6 +11,7 @@ async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
 
+# ✅ GOOGLE SHEETS (UNCHANGED)
 def send_to_sheets(data):
 
     scope = [
@@ -18,7 +19,6 @@ def send_to_sheets(data):
         "https://www.googleapis.com/auth/drive"
     ]
 
-    # ✅ Load credentials from GitHub secret
     creds_dict = json.loads(os.environ["GOOGLE_CREDS"])
 
     creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
@@ -35,11 +35,47 @@ def send_to_sheets(data):
         ])
 
 
+# ✅ NEW: RANDOM TAB CLICK
+async def click_random_tab(page):
+    print("Selecting random category tab...")
+
+    await page.wait_for_selector("div.tabItem_e229105c", timeout=15000)
+
+    # scroll horizontally
+    for _ in range(5):
+        await page.mouse.wheel(1000, 0)
+        await sleep(0.5, 1)
+
+    tabs = await page.query_selector_all("div.tabItem_e229105c")
+    print("Tabs found:", len(tabs))
+
+    if not tabs:
+        return
+
+    tab = random.choice(tabs)
+
+    text_el = await tab.query_selector("span")
+    tab_name = await text_el.inner_text() if text_el else "Unknown"
+
+    print("Clicking tab:", tab_name)
+
+    await tab.scroll_into_view_if_needed()
+    await sleep(1, 2)
+
+    try:
+        await tab.click()
+    except:
+        await page.evaluate("(el) => el.click()", tab)
+
+    await page.wait_for_timeout(5000)
+
+
+# ✅ UPDATED SCRAPER (REPLACED)
 async def scrape():
 
     results = []
 
-    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?disableNav=YES&_immersiveMode=true"
+    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?spm=a2g0o.home.tab.2.2b676278fRTsdF&disableNav=YES&pha_manifest=ssr&_immersiveMode=true"
 
     async with async_playwright() as p:
 
@@ -55,6 +91,7 @@ async def scrape():
             }
         )
 
+        # Force USA + USD
         await context.add_cookies([{
             "name": "aep_usuc_f",
             "value": "site=usa&c_tp=USD&region=US&b_locale=en_US",
@@ -64,17 +101,39 @@ async def scrape():
 
         page = await context.new_page()
 
-        print("Opening page...")
+        print("Opening listing page...")
         await page.goto(url, timeout=60000)
 
         await page.wait_for_timeout(5000)
 
-        for _ in range(10):
-            await page.mouse.wheel(0, 1200)
+        # ✅ CLICK RANDOM CATEGORY
+        await click_random_tab(page)
+
+        # wait for products
+        await page.wait_for_selector("a.productContainer", timeout=15000)
+
+        # ✅ SMART SCROLL (NEW)
+        previous_count = 0
+
+        while True:
+            await page.mouse.wheel(0, 2000)
             await sleep(1, 2)
 
+            cards = await page.query_selector_all("a.productContainer")
+            current_count = len(cards)
+
+            print("Loaded:", current_count)
+
+            if current_count == previous_count:
+                print("No more new products.")
+                break
+
+            previous_count = current_count
+
+        print("Final product count:", previous_count)
+
+        # ✅ SCRAPE PRODUCTS (same structure as before)
         cards = await page.query_selector_all("a.productContainer")
-        print("Found:", len(cards))
 
         for card in cards:
             try:
@@ -114,16 +173,17 @@ async def scrape():
 
                 results.append(product)
 
-                print(product["title"][:50], "|", price)
+                print(product["title"][:60], "|", price)
 
             except Exception as e:
-                print("Error:", e)
+                print("Card error:", e)
 
         await browser.close()
 
     return results
 
 
+# ✅ MAIN (UNCHANGED SHEETS LOGIC)
 async def main():
 
     print("Starting scraper...")
@@ -132,10 +192,9 @@ async def main():
 
     print("Scraped:", len(data))
 
-    # limit for testing
     data = data[:20]
 
-    # send to Google Sheets
+    # ✅ still sending to Google Sheets
     send_to_sheets(data)
 
     print("Sent to Google Sheets")
