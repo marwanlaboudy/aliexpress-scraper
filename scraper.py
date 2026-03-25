@@ -2,47 +2,58 @@ import asyncio
 import json
 import os
 import random
+import requests
 from playwright.async_api import async_playwright
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 
 
 async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
 
-def send_to_sheets(data):
+# ✅ RANDOM TAB CLICK (from your file)
+async def click_random_tab(page):
+    print("Selecting random category tab...")
 
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    await page.wait_for_selector("div.tabItem_e229105c", timeout=15000)
 
-    # ✅ Load credentials from GitHub secret
-    creds_dict = json.loads(os.environ["GOOGLE_CREDS"])
+    # horizontal scroll
+    for _ in range(5):
+        await page.mouse.wheel(1000, 0)
+        await sleep(0.5, 1)
 
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
+    tabs = await page.query_selector_all("div.tabItem_e229105c")
+    print("Tabs found:", len(tabs))
 
-    sheet = client.open("products").sheet1
+    if not tabs:
+        print("No tabs found!")
+        return
 
-    for product in data:
-        sheet.append_row([
-            product.get("title"),
-            product.get("price"),
-            product.get("image"),
-            product.get("link")
-        ])
+    tab = random.choice(tabs)
+
+    text_el = await tab.query_selector("span")
+    tab_name = await text_el.inner_text() if text_el else "Unknown"
+
+    print("Clicking tab:", tab_name)
+
+    await tab.scroll_into_view_if_needed()
+    await sleep(1, 2)
+
+    try:
+        await tab.click()
+    except:
+        await page.evaluate("(el) => el.click()", tab)
+
+    await page.wait_for_timeout(5000)
 
 
 async def scrape():
-
     results = []
 
-    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?disableNav=YES&_immersiveMode=true"
+    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?spm=a2g0o.home.tab.2.2b676278fRTsdF&disableNav=YES&pha_manifest=ssr&_immersiveMode=true"
 
     async with async_playwright() as p:
 
+        # ✅ KEEP HEADLESS (GitHub safe)
         browser = await p.chromium.launch(headless=True)
 
         context = await browser.new_context(
@@ -55,6 +66,7 @@ async def scrape():
             }
         )
 
+        # ✅ Force USA + USD
         await context.add_cookies([{
             "name": "aep_usuc_f",
             "value": "site=usa&c_tp=USD&region=US&b_locale=en_US",
@@ -64,24 +76,44 @@ async def scrape():
 
         page = await context.new_page()
 
-        print("Opening page...")
+        print("Opening listing page...")
         await page.goto(url, timeout=60000)
-
         await page.wait_for_timeout(5000)
 
-        for _ in range(10):
-            await page.mouse.wheel(0, 1200)
+        # ✅ NEW: click random category
+        await click_random_tab(page)
+
+        # wait for products
+        await page.wait_for_selector("a.productContainer", timeout=15000)
+
+        # ✅ NEW: smart scroll (instead of fixed loop)
+        previous_count = 0
+
+        while True:
+            await page.mouse.wheel(0, 2000)
             await sleep(1, 2)
 
+            cards = await page.query_selector_all("a.productContainer")
+            current_count = len(cards)
+
+            print("Loaded:", current_count)
+
+            if current_count == previous_count:
+                print("No more new products.")
+                break
+
+            previous_count = current_count
+
+        print("Final product count:", previous_count)
+
+        # ✅ scraping (same logic, slightly cleaned)
         cards = await page.query_selector_all("a.productContainer")
-        print("Found:", len(cards))
 
         for card in cards:
             try:
                 title = None
 
                 title_els = await card.query_selector_all("span.AIC-ATM-multiLine span")
-
                 bad_words = ["coupon", "free shipping", "free returns"]
 
                 for el in title_els:
@@ -106,7 +138,7 @@ async def scrape():
                     link = "https:" + link
 
                 product = {
-                    "title": title.strip() if title else "Unknown",
+                    "title": title.strip() if title else "Unknown title",
                     "price": price,
                     "image": image,
                     "link": link
@@ -114,10 +146,10 @@ async def scrape():
 
                 results.append(product)
 
-                print(product["title"][:50], "|", price)
+                print(product["title"][:60], "|", price)
 
             except Exception as e:
-                print("Error:", e)
+                print("Card error:", e)
 
         await browser.close()
 
@@ -125,20 +157,29 @@ async def scrape():
 
 
 async def main():
-
-    print("Starting scraper...")
+    print("Starting AliExpress listing scraper")
 
     data = await scrape()
 
-    print("Scraped:", len(data))
+    print("Scraped", len(data), "products")
 
     # limit for testing
     data = data[:20]
 
-    # send to Google Sheets
-    send_to_sheets(data)
+    webhook_url = "YOUR_N8N_WEBHOOK_URL"
 
-    print("Sent to Google Sheets")
+    try:
+        response = requests.post(webhook_url, json=data)
+        print("Sent to n8n:", response.status_code)
+    except Exception as e:
+        print("Webhook error:", e)
+
+    # save locally
+    path = os.path.join(os.getcwd(), "aliexpress_products_listing.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+    print("Saved locally")
 
 
 if __name__ == "__main__":
