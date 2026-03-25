@@ -2,22 +2,47 @@ import asyncio
 import json
 import os
 import random
-import requests
 from playwright.async_api import async_playwright
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 
 async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
 
+def send_to_sheets(data):
+
+    scope = [
+        "https://spreadsheets.google.com/feeds",
+        "https://www.googleapis.com/auth/drive"
+    ]
+
+    # ✅ Load credentials from GitHub secret
+    creds_dict = json.loads(os.environ["GOOGLE_CREDS"])
+
+    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+    client = gspread.authorize(creds)
+
+    sheet = client.open("products").sheet1
+
+    for product in data:
+        sheet.append_row([
+            product.get("title"),
+            product.get("price"),
+            product.get("image"),
+            product.get("link")
+        ])
+
+
 async def scrape():
+
     results = []
 
-    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?spm=a2g0o.home.tab.2.2b676278fRTsdF&disableNav=YES&pha_manifest=ssr&_immersiveMode=true"
+    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?disableNav=YES&_immersiveMode=true"
 
     async with async_playwright() as p:
 
-        # ✅ MUST be headless for GitHub
         browser = await p.chromium.launch(headless=True)
 
         context = await browser.new_context(
@@ -30,7 +55,6 @@ async def scrape():
             }
         )
 
-        # Force USA + USD
         await context.add_cookies([{
             "name": "aep_usuc_f",
             "value": "site=usa&c_tp=USD&region=US&b_locale=en_US",
@@ -40,18 +64,17 @@ async def scrape():
 
         page = await context.new_page()
 
-        print("Opening listing page...")
+        print("Opening page...")
         await page.goto(url, timeout=60000)
 
         await page.wait_for_timeout(5000)
 
-        # Scroll to load products
         for _ in range(10):
             await page.mouse.wheel(0, 1200)
             await sleep(1, 2)
 
         cards = await page.query_selector_all("a.productContainer")
-        print("Cards detected:", len(cards))
+        print("Found:", len(cards))
 
         for card in cards:
             try:
@@ -63,12 +86,10 @@ async def scrape():
 
                 for el in title_els:
                     txt = (await el.inner_text()).strip()
-
                     if txt and not any(b in txt.lower() for b in bad_words) and len(txt) > 15:
                         title = txt
                         break
 
-                # fallback
                 if not title:
                     title_el = await card.query_selector("span.AIC-TA-multi-icon-title")
                     if title_el:
@@ -85,7 +106,7 @@ async def scrape():
                     link = "https:" + link
 
                 product = {
-                    "title": title.strip() if title else "Unknown title",
+                    "title": title.strip() if title else "Unknown",
                     "price": price,
                     "image": image,
                     "link": link
@@ -93,10 +114,10 @@ async def scrape():
 
                 results.append(product)
 
-                print(product["title"][:60], "|", price)
+                print(product["title"][:50], "|", price)
 
             except Exception as e:
-                print("Card error:", e)
+                print("Error:", e)
 
         await browser.close()
 
@@ -104,31 +125,20 @@ async def scrape():
 
 
 async def main():
-    print("Starting AliExpress listing scraper")
+
+    print("Starting scraper...")
 
     data = await scrape()
 
-    print("Scraped", len(data), "products")
+    print("Scraped:", len(data))
 
-    # ✅ LIMIT FOR TESTING (optional)
+    # limit for testing
     data = data[:20]
 
-    # ✅ SEND TO N8N WEBHOOK
-    webhook_url = os.getenv("WEBHOOK_URL") or "YOUR_N8N_WEBHOOK_URL"
+    # send to Google Sheets
+    send_to_sheets(data)
 
-    try:
-        response = requests.post(webhook_url, json=data)
-        print("Sent to n8n:", response.status_code)
-    except Exception as e:
-        print("Webhook error:", e)
-
-    # ✅ SAVE LOCALLY
-    path = os.path.join(os.getcwd(), "aliexpress_products_listing.json")
-
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
-
-    print("Saved locally")
+    print("Sent to Google Sheets")
 
 
 if __name__ == "__main__":
