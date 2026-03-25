@@ -10,13 +10,13 @@ async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
 
-# ✅ RANDOM TAB CLICK (from your file)
+# ✅ RANDOM TAB CLICK
 async def click_random_tab(page):
     print("Selecting random category tab...")
 
     await page.wait_for_selector("div.tabItem_e229105c", timeout=15000)
 
-    # horizontal scroll
+    # horizontal scroll to reveal hidden tabs
     for _ in range(5):
         await page.mouse.wheel(1000, 0)
         await sleep(0.5, 1)
@@ -52,8 +52,7 @@ async def scrape():
     url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?spm=a2g0o.home.tab.2.2b676278fRTsdF&disableNav=YES&pha_manifest=ssr&_immersiveMode=true"
 
     async with async_playwright() as p:
-
-        # ✅ KEEP HEADLESS (GitHub safe)
+        # ✅ HEADLESS for GitHub
         browser = await p.chromium.launch(headless=True)
 
         context = await browser.new_context(
@@ -66,7 +65,7 @@ async def scrape():
             }
         )
 
-        # ✅ Force USA + USD
+        # Force USA + USD
         await context.add_cookies([{
             "name": "aep_usuc_f",
             "value": "site=usa&c_tp=USD&region=US&b_locale=en_US",
@@ -78,15 +77,16 @@ async def scrape():
 
         print("Opening listing page...")
         await page.goto(url, timeout=60000)
+
         await page.wait_for_timeout(5000)
 
-        # ✅ NEW: click random category
+        # ✅ CLICK RANDOM CATEGORY
         await click_random_tab(page)
 
         # wait for products
         await page.wait_for_selector("a.productContainer", timeout=15000)
 
-        # ✅ NEW: smart scroll (instead of fixed loop)
+        # ✅ SMART SCROLL (load all products)
         previous_count = 0
 
         while True:
@@ -106,7 +106,7 @@ async def scrape():
 
         print("Final product count:", previous_count)
 
-        # ✅ scraping (same logic, slightly cleaned)
+        # ✅ SCRAPE PRODUCTS
         cards = await page.query_selector_all("a.productContainer")
 
         for card in cards:
@@ -114,10 +114,12 @@ async def scrape():
                 title = None
 
                 title_els = await card.query_selector_all("span.AIC-ATM-multiLine span")
+
                 bad_words = ["coupon", "free shipping", "free returns"]
 
                 for el in title_els:
                     txt = (await el.inner_text()).strip()
+
                     if txt and not any(b in txt.lower() for b in bad_words) and len(txt) > 15:
                         title = txt
                         break
@@ -134,6 +136,7 @@ async def scrape():
                 image = await img_el.get_attribute("src") if img_el else None
 
                 link = await card.get_attribute("href")
+
                 if link and link.startswith("//"):
                     link = "https:" + link
 
@@ -163,9 +166,10 @@ async def main():
 
     print("Scraped", len(data), "products")
 
-    # limit for testing
+    # ✅ LIMIT (optional)
     data = data[:20]
 
+    # ✅ YOUR N8N WEBHOOK
     webhook_url = "YOUR_N8N_WEBHOOK_URL"
 
     try:
@@ -174,8 +178,9 @@ async def main():
     except Exception as e:
         print("Webhook error:", e)
 
-    # save locally
+    # ✅ SAVE LOCALLY
     path = os.path.join(os.getcwd(), "aliexpress_products_listing.json")
+
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
 
