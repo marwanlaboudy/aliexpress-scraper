@@ -10,49 +10,14 @@ async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
 
-# ✅ RANDOM TAB CLICK
-async def click_random_tab(page):
-    print("Selecting random category tab...")
-
-    await page.wait_for_selector("div.tabItem_e229105c", timeout=15000)
-
-    # horizontal scroll to reveal hidden tabs
-    for _ in range(5):
-        await page.mouse.wheel(1000, 0)
-        await sleep(0.5, 1)
-
-    tabs = await page.query_selector_all("div.tabItem_e229105c")
-    print("Tabs found:", len(tabs))
-
-    if not tabs:
-        print("No tabs found!")
-        return
-
-    tab = random.choice(tabs)
-
-    text_el = await tab.query_selector("span")
-    tab_name = await text_el.inner_text() if text_el else "Unknown"
-
-    print("Clicking tab:", tab_name)
-
-    await tab.scroll_into_view_if_needed()
-    await sleep(1, 2)
-
-    try:
-        await tab.click()
-    except:
-        await page.evaluate("(el) => el.click()", tab)
-
-    await page.wait_for_timeout(5000)
-
-
 async def scrape():
     results = []
 
     url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?spm=a2g0o.home.tab.2.2b676278fRTsdF&disableNav=YES&pha_manifest=ssr&_immersiveMode=true"
 
     async with async_playwright() as p:
-        # ✅ HEADLESS for GitHub
+
+        # ✅ MUST be headless for GitHub
         browser = await p.chromium.launch(headless=True)
 
         context = await browser.new_context(
@@ -80,34 +45,13 @@ async def scrape():
 
         await page.wait_for_timeout(5000)
 
-        # ✅ CLICK RANDOM CATEGORY
-        await click_random_tab(page)
-
-        # wait for products
-        await page.wait_for_selector("a.productContainer", timeout=15000)
-
-        # ✅ SMART SCROLL (load all products)
-        previous_count = 0
-
-        while True:
-            await page.mouse.wheel(0, 2000)
+        # Scroll to load products
+        for _ in range(10):
+            await page.mouse.wheel(0, 1200)
             await sleep(1, 2)
 
-            cards = await page.query_selector_all("a.productContainer")
-            current_count = len(cards)
-
-            print("Loaded:", current_count)
-
-            if current_count == previous_count:
-                print("No more new products.")
-                break
-
-            previous_count = current_count
-
-        print("Final product count:", previous_count)
-
-        # ✅ SCRAPE PRODUCTS
         cards = await page.query_selector_all("a.productContainer")
+        print("Cards detected:", len(cards))
 
         for card in cards:
             try:
@@ -124,6 +68,7 @@ async def scrape():
                         title = txt
                         break
 
+                # fallback
                 if not title:
                     title_el = await card.query_selector("span.AIC-TA-multi-icon-title")
                     if title_el:
@@ -136,7 +81,6 @@ async def scrape():
                 image = await img_el.get_attribute("src") if img_el else None
 
                 link = await card.get_attribute("href")
-
                 if link and link.startswith("//"):
                     link = "https:" + link
 
@@ -166,11 +110,11 @@ async def main():
 
     print("Scraped", len(data), "products")
 
-    # ✅ LIMIT (optional)
+    # ✅ LIMIT FOR TESTING (optional)
     data = data[:20]
 
-    # ✅ YOUR N8N WEBHOOK
-    webhook_url = "YOUR_N8N_WEBHOOK_URL"
+    # ✅ SEND TO N8N WEBHOOK
+    webhook_url = os.getenv("WEBHOOK_URL") or "YOUR_N8N_WEBHOOK_URL"
 
     try:
         response = requests.post(webhook_url, json=data)
