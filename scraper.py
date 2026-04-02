@@ -1,204 +1,143 @@
 import asyncio
-import json
-import os
 import random
+import os
+import requests
 from playwright.async_api import async_playwright
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
-
 
 async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
+# ✅ ONLY these categories allowed
+ALLOWED_CATEGORIES = [
+    "/gp/new-releases/hi/",
+    "/gp/new-releases/pet-supplies/",
+    "/gp/new-releases/lawn-garden/",
+    "/gp/new-releases/office-products/",
+    "/gp/new-releases/kitchen/",
+    "/gp/new-releases/home-garden/",
+    "/gp/new-releases/handmade/",
+    "/gp/new-releases/electronics/",
+    "/gp/new-releases/wireless/",
+    "/gp/new-releases/baby-products/",
+    "/gp/new-releases/automotive/",
+]
 
-# ✅ GOOGLE SHEETS (UNCHANGED)
-def send_to_sheets(data):
+async def click_random_category(page):
+    print("Waiting for category links...")
 
-    scope = [
-        "https://spreadsheets.google.com/feeds",
-        "https://www.googleapis.com/auth/drive"
-    ]
+    await page.wait_for_selector("ul li a[href*='/gp/new-releases/']", timeout=20000)
 
-    creds_dict = json.loads(os.environ["GOOGLE_CREDS"])
+    links = await page.query_selector_all("ul li a[href*='/gp/new-releases/']")
 
-    creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-    client = gspread.authorize(creds)
+    print("Total links found:", len(links))
 
-    sheet = client.open("products").sheet1
+    filtered_links = []
 
-    for product in data:
-        sheet.append_row([
-            product.get("title"),
-            product.get("price"),
-            product.get("image"),
-            product.get("link")
-        ])
+    for link in links:
+        href = await link.get_attribute("href")
+        if not href:
+            continue
 
+        # ✅ keep only allowed categories
+        if any(cat in href for cat in ALLOWED_CATEGORIES):
+            filtered_links.append(link)
 
-# ✅ NEW: RANDOM TAB CLICK
-async def click_random_tab(page):
-    print("Selecting random category tab...")
+    print("Filtered allowed categories:", len(filtered_links))
 
-    await page.wait_for_selector("div.tabItem_e229105c", timeout=15000)
+    if not filtered_links:
+        print("No matching categories found!")
+        return False
 
-    # scroll horizontally
-    for _ in range(5):
-        await page.mouse.wheel(1000, 0)
-        await sleep(0.5, 1)
+    chosen = random.choice(filtered_links)
 
-    tabs = await page.query_selector_all("div.tabItem_e229105c")
-    print("Tabs found:", len(tabs))
+    name = await chosen.inner_text()
+    print("Clicking category:", name.strip())
 
-    if not tabs:
-        return
-
-    tab = random.choice(tabs)
-
-    text_el = await tab.query_selector("span")
-    tab_name = await text_el.inner_text() if text_el else "Unknown"
-
-    print("Clicking tab:", tab_name)
-
-    await tab.scroll_into_view_if_needed()
+    await chosen.scroll_into_view_if_needed()
     await sleep(1, 2)
 
     try:
-        await tab.click()
+        await chosen.click()
     except:
-        await page.evaluate("(el) => el.click()", tab)
+        await page.evaluate("(el) => el.click()", chosen)
 
-    await page.wait_for_timeout(5000)
+    print("Clicked category!")
+    return True
 
+async def scrape_products(page):
+    print("Waiting for product titles...")
 
-# ✅ UPDATED SCRAPER (REPLACED)
-async def scrape():
+    await page.wait_for_selector("div[class*='line-clamp']", timeout=20000)
 
-    results = []
+    # Grab the links that contain the line-clamp titles
+    product_elements = await page.query_selector_all("a:has(div[class*='line-clamp'])")
 
-    url = "https://www.aliexpress.com/ssr/300000544/Global-PC-New1?spm=a2g0o.home.tab.2.2b676278fRTsdF&disableNav=YES&pha_manifest=ssr&_immersiveMode=true"
+    print(f"\nFound {len(product_elements)} products:\n")
+
+    products = []
+
+    for i, el in enumerate(product_elements, start=1):
+        try:
+            title_el = await el.query_selector("div[class*='line-clamp']")
+            text = await title_el.inner_text()
+            text = text.strip()
+            
+            href = await el.get_attribute("href")
+
+            if text and href:
+                full_link = f"https://www.amazon.com{href}"
+                products.append({
+                    "title": text,
+                    "link": full_link
+                })
+                print(f"{i}. {text}")
+        except:
+            continue
+
+    return products
+
+async def main():
+    url = "https://www.amazon.com/gp/new-releases/ref=zg_bs_tab_bsnr"
 
     async with async_playwright() as p:
-
-        browser = await p.chromium.launch(headless=True)
-
-        context = await browser.new_context(
-            locale="en-US",
-            viewport={"width": 1280, "height": 800},
-            geolocation={"longitude": -74.0060, "latitude": 40.7128},
-            permissions=["geolocation"],
-            extra_http_headers={
-                "Accept-Language": "en-US,en;q=0.9"
-            }
+        # Changed to headless=True for GitHub Actions
+        browser = await p.chromium.launch(
+            headless=True,
+            args=["--start-maximized"]
         )
 
-        # Force USA + USD
-        await context.add_cookies([{
-            "name": "aep_usuc_f",
-            "value": "site=usa&c_tp=USD&region=US&b_locale=en_US",
-            "domain": ".aliexpress.com",
-            "path": "/"
-        }])
-
+        # Replaced viewport=None with standard desktop size for headless compatibility
+        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
         page = await context.new_page()
 
-        print("Opening listing page...")
-        await page.goto(url, timeout=60000)
+        print("Opening Amazon New Releases...")
+        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
 
         await page.wait_for_timeout(5000)
 
-        # ✅ CLICK RANDOM CATEGORY
-        await click_random_tab(page)
+        # ✅ click only from allowed categories
+        clicked = await click_random_category(page)
 
-        # wait for products
-        await page.wait_for_selector("a.productContainer", timeout=15000)
+        if clicked:
+            await page.wait_for_load_state("domcontentloaded")
+            await page.wait_for_timeout(5000)
 
-        # ✅ SMART SCROLL (NEW)
-        previous_count = 0
+            # scrape titles and links
+            products = await scrape_products(page)
 
-        while True:
-            await page.mouse.wheel(0, 2000)
-            await sleep(1, 2)
+            print("\nDone. Total products scraped:", len(products))
 
-            cards = await page.query_selector_all("a.productContainer")
-            current_count = len(cards)
+            # Send data to n8n webhook
+            webhook_url = os.environ.get("N8N_WEBHOOK_URL")
+            if webhook_url and products:
+                print("Sending data to n8n webhook...")
+                response = requests.post(webhook_url, json={"products": products})
+                print(f"n8n Response Status: {response.status_code}")
+            else:
+                print("No N8N_WEBHOOK_URL found, skipping webhook delivery.")
 
-            print("Loaded:", current_count)
-
-            if current_count == previous_count:
-                print("No more new products.")
-                break
-
-            previous_count = current_count
-
-        print("Final product count:", previous_count)
-
-        # ✅ SCRAPE PRODUCTS (same structure as before)
-        cards = await page.query_selector_all("a.productContainer")
-
-        for card in cards:
-            try:
-                title = None
-
-                title_els = await card.query_selector_all("span.AIC-ATM-multiLine span")
-
-                bad_words = ["coupon", "free shipping", "free returns"]
-
-                for el in title_els:
-                    txt = (await el.inner_text()).strip()
-                    if txt and not any(b in txt.lower() for b in bad_words) and len(txt) > 15:
-                        title = txt
-                        break
-
-                if not title:
-                    title_el = await card.query_selector("span.AIC-TA-multi-icon-title")
-                    if title_el:
-                        title = await title_el.inner_text()
-
-                price_el = await card.query_selector(".AIC4-PI-price-text")
-                price = await price_el.inner_text() if price_el else None
-
-                img_el = await card.query_selector("img")
-                image = await img_el.get_attribute("src") if img_el else None
-
-                link = await card.get_attribute("href")
-                if link and link.startswith("//"):
-                    link = "https:" + link
-
-                product = {
-                    "title": title.strip() if title else "Unknown",
-                    "price": price,
-                    "image": image,
-                    "link": link
-                }
-
-                results.append(product)
-
-                print(product["title"][:60], "|", price)
-
-            except Exception as e:
-                print("Card error:", e)
-
+        # Removed asyncio.Future() so the script can actually terminate on GitHub
         await browser.close()
-
-    return results
-
-
-# ✅ MAIN (UNCHANGED SHEETS LOGIC)
-async def main():
-
-    print("Starting scraper...")
-
-    data = await scrape()
-
-    print("Scraped:", len(data))
-
-    data = data[:20]
-
-    # ✅ still sending to Google Sheets
-    send_to_sheets(data)
-
-    print("Sent to Google Sheets")
-
 
 if __name__ == "__main__":
     asyncio.run(main())
