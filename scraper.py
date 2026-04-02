@@ -1,11 +1,40 @@
 import asyncio
 import random
 import os
+import json
 import requests
 from playwright.async_api import async_playwright
+import gspread
+from oauth2client.service_account import ServiceAccountCredentials
 
 async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
+
+# ✅ NEW: GOOGLE SHEETS INTEGRATION
+def send_to_sheets(data):
+    print("Connecting to Google Sheets...")
+    try:
+        scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+
+        creds_dict = json.loads(os.environ["GOOGLE_CREDS"])
+        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+        client = gspread.authorize(creds)
+
+        # Make sure your Google Sheet is actually named "products"
+        sheet = client.open("products").sheet1
+
+        for product in data:
+            sheet.append_row([
+                product.get("title"),
+                product.get("link")
+            ])
+        print("✅ Successfully sent to Google Sheets")
+    except Exception as e:
+        print(f"❌ Google Sheets Error: {e}")
+
 
 # ✅ ONLY these categories allowed
 ALLOWED_CATEGORIES = [
@@ -127,7 +156,11 @@ async def main():
 
             print("\nDone. Total products scraped:", len(products))
 
-            # Send data to n8n webhook
+            # ✅ Write directly to Google Sheets
+            if products:
+                send_to_sheets(products)
+
+            # Send data to n8n webhook (Kept this intact so your AI workflow still runs)
             webhook_url = os.environ.get("N8N_WEBHOOK_URL")
             if webhook_url and products:
                 print("Sending data to n8n webhook...")
