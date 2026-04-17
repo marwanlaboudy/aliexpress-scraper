@@ -10,8 +10,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 async def sleep(a=2, b=4):
     await asyncio.sleep(random.uniform(a, b))
 
+
+# ✅ GOOGLE SHEETS FUNCTION
 def send_to_sheets(data):
     print("Connecting to Google Sheets...")
+
     try:
         scope = [
             "https://spreadsheets.google.com/feeds",
@@ -24,17 +27,16 @@ def send_to_sheets(data):
 
         sheet = client.open("products").sheet1
 
-        # ✅ Limit to first 30 products only
-        limited_data = data[:30]
-
-        for product in limited_data:
+        for product in data[:30]:
             sheet.append_row([
                 product.get("title"),
                 product.get("link")
             ])
-        print(f"✅ Successfully sent {len(limited_data)} products to Google Sheets")
+
+        print(f"Sent {len(data[:30])} products to Google Sheets")
+
     except Exception as e:
-        print(f"❌ Google Sheets Error: {e}")
+        print("Google Sheets Error:", e)
 
 
 ALLOWED_CATEGORIES = [
@@ -44,41 +46,55 @@ ALLOWED_CATEGORIES = [
     "/gp/new-releases/office-products/",
     "/gp/new-releases/kitchen/",
     "/gp/new-releases/home-garden/",
-    "/gp/new-releases/electronics/",
-    "/gp/new-releases/wireless/",
     "/gp/new-releases/baby-products/",
     "/gp/new-releases/automotive/",
 ]
 
+MOVERS_CATEGORIES = [
+    "/gp/movers-and-shakers/hi/",
+    "/gp/movers-and-shakers/pet-supplies/",
+    "/gp/movers-and-shakers/lawn-garden/",
+    "/gp/movers-and-shakers/office-products/",
+    "/gp/movers-and-shakers/kitchen/",
+    "/gp/movers-and-shakers/home-garden/",
+    "/gp/movers-and-shakers/baby-products/",
+    "/gp/movers-and-shakers/automotive/",
+]
+
+
 async def click_random_category(page):
     print("Waiting for category links...")
 
-    await page.wait_for_selector("ul li a[href*='/gp/new-releases/']", timeout=20000)
+    await page.wait_for_selector(
+        "ul._p13n-zg-nav-tree-all_style_zg-browse-group__88fbz",
+        timeout=30000
+    )
 
-    links = await page.query_selector_all("ul li a[href*='/gp/new-releases/']")
+    await page.wait_for_timeout(3000)
 
-    print("Total links found:", len(links))
+    links = await page.query_selector_all(
+        "ul._p13n-zg-nav-tree-all_style_zg-browse-group__88fbz a"
+    )
+
+    if "movers-and-shakers" in page.url:
+        allowed = MOVERS_CATEGORIES
+        print("Movers & Shakers")
+    else:
+        allowed = ALLOWED_CATEGORIES
+        print("New Releases")
 
     filtered_links = []
 
     for link in links:
         href = await link.get_attribute("href")
-        if not href:
-            continue
-
-        if any(cat in href for cat in ALLOWED_CATEGORIES):
+        if href and any(cat in href for cat in allowed):
             filtered_links.append(link)
 
-    print("Filtered allowed categories:", len(filtered_links))
-
     if not filtered_links:
-        print("No matching categories found!")
+        print("No categories found!")
         return False
 
     chosen = random.choice(filtered_links)
-
-    name = await chosen.inner_text()
-    print("Clicking category:", name.strip())
 
     await chosen.scroll_into_view_if_needed()
     await sleep(1, 2)
@@ -88,83 +104,90 @@ async def click_random_category(page):
     except:
         await page.evaluate("(el) => el.click()", chosen)
 
-    print("Clicked category!")
+    print("Category clicked")
     return True
 
+
+async def maybe_go_to_page_2(page):
+    if random.choice([True, False]):
+        try:
+            await page.wait_for_selector("a[href*='pg=2']", timeout=5000)
+            links = await page.query_selector_all("a[href*='pg=2']")
+
+            if links:
+                chosen = random.choice(links)
+                await chosen.click()
+                print("Moved to page 2")
+                await page.wait_for_timeout(3000)
+        except:
+            print("No page 2")
+    else:
+        print("Page 1")
+
+
 async def scrape_products(page):
-    print("Waiting for product titles...")
+    await page.wait_for_selector(
+        "div[class*='p13n-sc-css-line-clamp']",
+        timeout=20000
+    )
 
-    await page.wait_for_selector("div[class*='line-clamp']", timeout=20000)
-
-    product_elements = await page.query_selector_all("a:has(div[class*='line-clamp'])")
-
-    print(f"\nFound {len(product_elements)} products:\n")
+    elements = await page.query_selector_all(
+        "a:has(div[class*='p13n-sc-css-line-clamp'])"
+    )
 
     products = []
 
-    for i, el in enumerate(product_elements, start=1):
-        # ✅ Stop scraping once we have 30
+    for el in elements:
         if len(products) >= 30:
             break
-        try:
-            title_el = await el.query_selector("div[class*='line-clamp']")
-            text = await title_el.inner_text()
-            text = text.strip()
 
+        try:
+            title = await el.inner_text()
             href = await el.get_attribute("href")
 
-            if text and href:
-                full_link = f"https://www.amazon.com{href}"
+            if title and href:
                 products.append({
-                    "title": text,
-                    "link": full_link
+                    "title": title.strip(),
+                    "link": f"https://www.amazon.com{href}"
                 })
-                print(f"{i}. {text}")
         except:
             continue
 
     return products
 
+
 async def main():
-    url = "https://www.amazon.com/gp/new-releases/ref=zg_bs_tab_bsnr"
+    urls = [
+        "https://www.amazon.com/gp/new-releases/",
+        "https://www.amazon.com/gp/movers-and-shakers/"
+    ]
+
+    url = random.choice(urls)
+    print("Starting:", url)
 
     async with async_playwright() as p:
-        browser = await p.chromium.launch(
-            headless=True,
-            args=["--start-maximized"]
-        )
+        browser = await p.chromium.launch(headless=False)
+        page = await browser.new_page()
 
-        context = await browser.new_context(viewport={"width": 1920, "height": 1080})
-        page = await context.new_page()
-
-        print("Opening Amazon New Releases...")
-        await page.goto(url, timeout=60000, wait_until="domcontentloaded")
-
+        await page.goto(url)
         await page.wait_for_timeout(5000)
 
         clicked = await click_random_category(page)
 
         if clicked:
-            await page.wait_for_load_state("domcontentloaded")
             await page.wait_for_timeout(5000)
+
+            await maybe_go_to_page_2(page)
 
             products = await scrape_products(page)
 
-            print("\nDone. Total products scraped:", len(products))
+            print("Scraped:", len(products))
 
             if products:
                 send_to_sheets(products)
 
-            webhook_url = os.environ.get("N8N_WEBHOOK_URL")
-            if webhook_url and products:
-                print("Sending data to n8n webhook...")
-                # ✅ Also limit webhook payload to 30
-                response = requests.post(webhook_url, json={"products": products[:30]})
-                print(f"n8n Response Status: {response.status_code}")
-            else:
-                print("No N8N_WEBHOOK_URL found, skipping webhook delivery.")
-
         await browser.close()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
