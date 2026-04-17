@@ -2,8 +2,6 @@ name: Run Scraper
 
 on:
   workflow_dispatch:
-  schedule:
-    - cron: "35 11 * * *"  # runs daily at 6 AM UTC
 
 jobs:
   run-script:
